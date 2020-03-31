@@ -1,9 +1,8 @@
-#U GR2-gfx-extractor
- Gravity Rush 2's GFX model extractor for Noesis
+# Gravity Rush 2's GFX model extractor for Noesis
  
- This is still at pretty early stage, only works for character models at the moment
+This is still at pretty early stage, only works for character models at the moment
  
- Supported:
+Supported:
 	Mesh
 	Object Locator (effect, animation etc)
 	Bone 
