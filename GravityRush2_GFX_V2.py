@@ -303,7 +303,7 @@ def load0x0300Chunk(index, name, length): #Mesh Data Pointer
     print("Loading Mesh Vertex - Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
     loadMeshVertex(meshInfos[-1].vertexCount, meshInfos[-1].vertexStruct)
   elif typeID == 0x01020000: #FaceData
-    print("Loading Mesh Face- Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
+    print("Loading Mesh Face - Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
     loadMeshFace(meshInfos[-1].faceCount)
   elif typeID == 0x01140000: #WeightData
     loadMeshWeight(meshInfos[-1].vertexCount, meshInfos[-1].boneMap)
@@ -336,8 +336,22 @@ def load0x0400Chunk(index, name, length): #Mesh Info
 
     for i in indexOf0x0600Chunk:  #Load Face Chain
       loadChunk(i)
+    
+    if len(child0x0f00ChunkList) > 0:
+      loadChunk(child0x0f00ChunkList[meshIndex])
 
-    loadChunk(child0x0f00ChunkList[meshIndex])
+    #loadChunk(indexOf0x0600Chunk[0]) #Load First Chain
+
+    '''
+    if numOfFaceChunk > 1:
+      meshs[-1].setName(meshs[-1].name + "_0")
+      for i in range(1, numOfFaceChunk):  #Load Face Chain
+        meshs.append(meshs[-1])
+        meshs[-1].setName(meshs[-1].name[:-1] + str(i))
+        meshInfos.append(meshInfos[-1])
+        print("Loading sub mesh %s" % meshs[-1].name)
+        loadChunk(indexOf0x0600Chunk[i])
+    '''
 
 def load0x0500Chunk(index, name, length):
   #Header
@@ -406,7 +420,10 @@ def load0x1100Chunk(index, name, length):
   lengthOfTextureString = bs.readUInt()
   textureString = bs.readBytes(lengthOfTextureString).decode('ASCII').rstrip("\0")
   print("Texture loaded: %s" % textureString)
-  meshs[-1].setMaterial(textureString)
+  if meshs[-1].matName == "default":
+    meshs[-1].setMaterial(textureString)
+  elif (textureString in meshs[-1].matName) == False:
+    meshs[-1].setMaterial(meshs[-1].matName + " + " + textureString)
 
 
 def load0x0f00Chunk(index, name, length):
@@ -421,9 +438,11 @@ def load0x0f00Chunk(index, name, length):
 
 def loadMeshVertex(vertexCount, vertexStruct):
   vertexs = []
-  uvs = []
+  uvCount = vertexStruct.count(0x9E)
+  print("UV Count: %i" % uvCount)
+  uvs = [[]]*uvCount
   for vertex in range(vertexCount):
-    uvLoaded = False
+    uvLoaded = 0
     for dataType in vertexStruct:
       if dataType == 0x83: #Vertex
         vertexs.append(NoeVec3.fromBytes(bs.readBytes(12)))
@@ -432,19 +451,17 @@ def loadMeshVertex(vertexCount, vertexStruct):
       elif dataType == 0x9C: #Unknown, skip
         bs.seek(4, NOESEEK_REL)
       elif dataType == 0x9E: #UV
-        if not uvLoaded:
-          u = bs.readUShort()/1024
-          v = bs.readUShort()/1024
-          uvLoaded = True
-          uvs.append(NoeVec3((u, v, 0)))
-        else: #There's some vertex group with multiple UV? need to check more
-          bs.seek(4, NOESEEK_REL)
+        u = bs.readUShort()/1024
+        v = bs.readUShort()/1024
+        uvs[uvLoaded].append(NoeVec3((u, v, 0)))
+        uvLoaded += 1
       elif dataType == 0x88: #Unknown, skip
         bs.seek(8, NOESEEK_REL)
       elif dataType == 0x87: #Unknown, skip
         bs.seek(8, NOESEEK_REL)
   meshs[-1].setPositions(vertexs)
-  meshs[-1].setUVs(uvs)
+  for uv in uvs:
+    meshs[-1].setUVs(uv)
     
 
 def loadMeshFace(faceCount):
@@ -454,7 +471,7 @@ def loadMeshFace(faceCount):
     faces.append(bs.readUShort())
     faces.append(bs.readUShort())
     faces.append(bs.readUShort())
-  meshs[-1].setIndices(faces + meshs[-1].indices)
+  meshs[-1].setIndices(meshs[-1].indices + faces)
 
 def loadMeshWeight(vertexCount, boneMap):
   weightList = []
@@ -473,8 +490,8 @@ def loadMeshWeight(vertexCount, boneMap):
 
     linkedBone = linkedBone[:len(weight)]
     if len(weight) != len(linkedBone):
-      print("NoeVertWeight size mismatch!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ")
-      print(linkedBone)
+      print("Error. NoeVertWeight mismatch.")
+      print(linkedBone)  
       print(weight)
       input()
 
