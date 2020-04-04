@@ -15,5 +15,3 @@ Supported:
  Place GR2_Hash_Dict folder to the root folder of Noesis to enable reverse name hash.
  
  GFX Format research note: https://docs.google.com/document/d/1eW8BNMuE6chZebgClRnRoxRCEMDCAKPadYEhpK4AIV0/edit?usp=sharing
- 
- For more compatable version of this extractor. check out https://github.com/freezecook/GR2-Extract
