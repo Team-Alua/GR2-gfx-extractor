@@ -10,8 +10,10 @@ import os
 import copy
 
 debug = True  # please change to False out when done.
-print_CSV = True
+print_CSV = False
 seperate_sub_mesh = True
+global_scale = 100
+remove_loose_vertice = True
 
 
 def registerNoesisTypes():
@@ -154,6 +156,9 @@ class MeshInfo:
     def setIndexOf0x0600Chunk(self, indexOf0x0600Chunk):
         self.indexOf0x0600Chunk = indexOf0x0600Chunk
 
+    def setVertexCount(self, vertexCount):
+        self.vertexCount = vertexCount
+
 
 def noepyLoadModel(data, mdlList):
     # Initialization
@@ -200,6 +205,8 @@ def noepyLoadModel(data, mdlList):
     numOfBone = 0
     global numOfMesh
     numOfMesh = 0
+    global currentMesh
+    currentMesh = 0
 
     for i in range(numDataInIndexChunk):
         indexList.append(IndexChunk(getNameFromHash(
@@ -221,11 +228,16 @@ def noepyLoadModel(data, mdlList):
     # Load root 0x0200 Chunk
     loadChunk(rootBoneIndex)
 
+    if remove_loose_vertice:
+        cleanUpMesh()
+
     model = NoeModel(meshs)
     model.setBones(bones)
     mdlList.append(model)
+
     if print_CSV:
       printMeshCSV()
+
     return 1
 
 
@@ -292,7 +304,10 @@ def loadChunk(index):
 
 def load0x0200Chunk(index, name, length):  # Object/Bone tree
     # Load Translation
-    translation = NoeVec3.fromBytes(bs.readBytes(12))
+    z = bs.readFloat() * global_scale
+    y = bs.readFloat() * global_scale
+    x = bs.readFloat() * global_scale
+    translation = NoeVec3((z, y, x))
     bs.seek(4, NOESEEK_REL)
     rotation = NoeQuat.fromBytes(bs.readBytes(16))
     scale = NoeVec3.fromBytes(bs.readBytes(12))
@@ -301,12 +316,7 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
     # Load Extra Infomation
     parentID = bs.readUInt() - 1
     isBone = bs.readUShort()
-    '''
-    if not isBone and not extract_non_bone:
-        bones.append(None)
-        boneChild.append(None)
-        return
-    '''
+
     numOfChild = bs.readUShort()
     bs.seek(4, NOESEEK_REL)
     boneName = getNameFromHash(bs.readUInt())
@@ -316,11 +326,6 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
 
     boneMatrix = rotation.toMat43(transposed=1)
     boneMatrix[3] = translation
-    '''
-    boneMatrix[0][0] = scale[0]
-    boneMatrix[1][1] = scale[1]
-    boneMatrix[2][2] = scale[2]
-    '''
 
     if debug:
         print("Bone %i %s" % (index, boneName))
@@ -363,8 +368,6 @@ def load0x0300Chunk(index, name, length):  # Mesh Data Pointer
         loadMeshFace(meshInfos[-1].faceCount[-1])
     elif typeID == 0x01140000:  # WeightData
         loadMeshWeight(meshInfos[-1].vertexCount, meshInfos[-1].boneMap)
-
-currentMesh = 0
 
 def load0x0400Chunk(index, name, length):  # Mesh Info
     global currentMesh
@@ -539,7 +542,10 @@ def loadMeshVertex(vertexCount, vertexStruct):
         uvLoaded = 0
         for dataType in vertexStruct:
             if dataType == 0x83:  # Vertex
-                vertexs.append(NoeVec3.fromBytes(bs.readBytes(12)))
+                z = bs.readFloat() * global_scale
+                y = bs.readFloat() * global_scale
+                x = bs.readFloat() * global_scale
+                vertexs.append(NoeVec3((z, y, x)))
             elif dataType == 0xA1:  # Unknown, skip
                 bs.seek(4, NOESEEK_REL)
             elif dataType == 0x9C:  # Unknown, skip
@@ -547,7 +553,7 @@ def loadMeshVertex(vertexCount, vertexStruct):
             elif dataType == 0x9E:  # UV
                 u = bs.readShort()/1024  
                 v = bs.readShort()/1024
-                if uvLoaded < 1:
+                if uvLoaded < 1: #Only load the first UV
                   uvs[uvLoaded].append(NoeVec3((u, v, 0)))
                 uvLoaded += 1
                 '''
@@ -615,3 +621,53 @@ def typeOf0x0800Chunk(index):
   chunkType = hex(bs.readUShort()+ 0x10000)
   bs.seek(origonalOffset, NOESEEK_ABS)
   return chunkType[5:]+chunkType[3:5]
+
+def cleanUpMesh():
+    for i in range(0, len(meshs)):
+        vertice_used = [False] * len(meshs[i].positions)
+        for x in meshs[i].indices:
+            vertice_used[x] = True
+
+        lookUpTable = []
+        current_index = 0
+        #Generate look up table
+        for x in range(0, len(meshs[i].positions)):
+            lookUpTable.append(-1)
+            if vertice_used[x]:
+                lookUpTable[-1] = current_index
+                current_index += 1
+        
+        #Regenerate face with look up table
+        new_indice = []
+        for indices in meshs[i].indices:
+            new_indice.append(lookUpTable[indices])
+        meshs[i].setIndices(new_indice)
+
+        new_vertice = []
+        #generate new vertice list
+        for x in range(0, len(meshs[i].positions)):
+            if vertice_used[x]:
+                new_vertice.append(meshs[i].positions[x])
+        meshs[i].setPositions(new_vertice)
+
+        #generate new uv list 
+        new_uv = []
+        for x in range(0, len(meshs[i].uvs)):
+            if vertice_used[x]:
+                new_uv.append(meshs[i].uvs[x])
+        meshs[i].setUVs(new_uv)
+
+        #generate new weight list
+        if len(meshs[i].weights) != 0:
+            new_weights = []
+            for x in range(0, len(meshs[i].weights)):
+                if vertice_used[x]:
+                    new_weights.append(meshs[i].weights[x])
+            meshs[i].setWeights(new_weights)
+
+        #Update mesh info
+            meshInfos[i].setVertexCount(current_index + 1)
+
+
+                
+    
