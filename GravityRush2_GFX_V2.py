@@ -9,11 +9,13 @@ import rapi
 import os
 import copy
 
-debug = True  # please change to False out when done.
+debug = False  # please change to False out when done.
 print_CSV = False
 seperate_sub_mesh = True
 global_scale = 100
 remove_loose_vertice = True
+LOD_suffix = False
+reverse_binding = False
 
 
 def registerNoesisTypes():
@@ -108,6 +110,9 @@ class IndexChunk:
         self.offsetFromDataChunk = offset
         self.length = length
 
+    def setCustomName(self, customName):
+        self.customName = customName
+
 
 class MeshInfo:
     # Infomations from 0x0400 Chunk
@@ -167,8 +172,8 @@ def noepyLoadModel(data, mdlList):
 
     # Read header
     bs.seek(0x08, NOESEEK_ABS)
-    global modelNameHash
-    modelNameHash = getNameFromHash(bs.readUInt())
+    global modelName
+    modelName = getNameFromHash(bs.readUInt())
     bs.seek(0x0C, NOESEEK_ABS)
     global fileSize
     fileSize = bs.readUInt()
@@ -194,13 +199,15 @@ def noepyLoadModel(data, mdlList):
     meshInfos = []
     global meshs
     meshs = []
+    global indexBoneIDLookUpTable
+    indexBoneIDLookUpTable = [-1]*numDataInIndexChunk
 
     global child0x0f00ChunkList
     child0x0f00ChunkList = []
-    '''
+
     global indexOf0x2b00Chunk
-    indexOf0x2b00Chunk = -1
-    '''
+    indexOf0x2b00Chunk = []
+
     global numOfBone
     numOfBone = 0
     global numOfMesh
@@ -208,35 +215,55 @@ def noepyLoadModel(data, mdlList):
     global currentMesh
     currentMesh = 0
 
+    global materialList
+    materialList = []
+
+    materialIndexs = []
+
+    global LOD
+    LOD = ""
+
+    if "lod2" in modelName:
+        LOD = "_LOD3"
+
+    rootBones = []
+
     for i in range(numDataInIndexChunk):
-        indexList.append(IndexChunk(getNameFromHash(
-            bs.readUInt()), bs.readUInt(), bs.readUInt(), bs.readUInt()))
+        indexList.append(IndexChunk(getNameFromHash(bs.readUInt()), bs.readUInt(), bs.readUInt(), bs.readUInt()))
         if indexList[i].typeID % 0x10000 == 0x0002:
             numOfBone += 1
             if indexList[i].typeID == 0x010b0002:  # root
-                rootBoneIndex = i
-        if indexList[i].typeID == 0x00000004:
+                rootBones.append(i)
+        elif indexList[i].typeID % 0x10000 == 0x0008:
+            materialIndexs.append(i)
+        elif indexList[i].typeID == 0x00000004:
             numOfMesh += 1
         elif indexList[i].typeID == 0x0000000f:
             child0x0f00ChunkList.append(i)  # Assume this is linear
         elif indexList[i].typeID == 0x0000002b:
-            indexOf0x2b00Chunk = i
+            indexOf0x2b00Chunk.append(i)
+    
+    
+    for materialIndex in materialIndexs:
+        loadChunk(materialIndex)
 
     global bones
     bones = [None] * numOfBone
 
     # Load root 0x0200 Chunk
-    loadChunk(rootBoneIndex)
+    for rootBone in rootBones:
+        loadChunk(rootBone)
 
     if remove_loose_vertice:
         cleanUpMesh()
 
     model = NoeModel(meshs)
+    model.setModelMaterials(NoeModelMaterials([], materialList))
     model.setBones(bones)
     mdlList.append(model)
 
     if print_CSV:
-      printMeshCSV()
+        printMeshCSV()
 
     return 1
 
@@ -244,61 +271,90 @@ def noepyLoadModel(data, mdlList):
 def loadChunk(index):
     origonalOffset = bs.tell()
     result = None
-    bs.seek(indexList[index].offsetFromDataChunk + pointerOfDataChunk, NOESEEK_ABS)
-    if indexList[index].typeID % 0x10000 == 0x0002:
-        print()
-        print("Load Chunk 0x0200xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0200Chunk(
-            index, indexList[index].name, indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x0003:
-        print("Load Chunk 0x0300xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0300Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x0004:
-        print("Load Chunk 0x0400xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0400Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x0005:
-        print("Load Chunk 0x0500xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0500Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x0006:
-        print("Load Chunk 0x0600xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0600Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID == 0x02220008:
-        print("Load Chunk 0x08002202 - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x08002202Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID == 0x02230008:
-        print("Load Chunk 0x08002302 - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x08002302Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID == 0x02240008:
-        print("Load Chunk 0x08002402 - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x08002402Chunk(index, indexList[index].name,  indexList[index].length)      
-    elif indexList[index].typeID == 0x02330008:
-        print("Load Chunk 0x08003302 - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x08003302Chunk(index, indexList[index].name,  indexList[index].length)                
-    elif indexList[index].typeID % 0x10000 == 0x0009:
-        print("Load Chunk 0x0900xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0900Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x0011:
-        print("Load Chunk 0x1100xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x1100Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x000f:
-        print("Load Chunk 0x0f00xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x0f00Chunk(
-            index, indexList[index].name,  indexList[index].length)
-    elif indexList[index].typeID % 0x10000 == 0x0010:
-        print("Load Chunk 0x1000xxxx - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
-        result = load0x1000Chunk(
-            index, indexList[index].name,  indexList[index].length)
+    if index > -1:
+        print("Loading %s - " % hex(index), end="")
+        bs.seek(indexList[index].offsetFromDataChunk + pointerOfDataChunk, NOESEEK_ABS)
+        if indexList[index].typeID % 0x10000 == 0x0002:
+            print("Chunk 0x0200xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0200Chunk(index, indexList[index].name, indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0003:
+            print("Chunk 0x0300xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0300Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0004:
+            print("Chunk 0x0400xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0400Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0005:
+            print("Chunk 0x0500xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0500Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0006:
+            print("Chunk 0x0600xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0600Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02010008:
+            print("Chunk 0x08000102 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08000102Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02200008:
+            print("Chunk 0x08002002 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002002Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02220008:
+            print("Chunk 0x08002202 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002202Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02230008:
+            print("Chunk 0x08002302 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002302Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02240008:
+            print("Chunk 0x08002402 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002402Chunk(index, indexList[index].name,  indexList[index].length)  
+        elif indexList[index].typeID == 0x02280008:
+            print("Chunk 0x08002802 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002802Chunk(index, indexList[index].name,  indexList[index].length)        
+        elif indexList[index].typeID == 0x02290008:
+            print("Chunk 0x08002902 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002902Chunk(index, indexList[index].name,  indexList[index].length)    
+        elif indexList[index].typeID == 0x022A0008:
+            print("Chunk 0x08002A02 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002A02Chunk(index, indexList[index].name,  indexList[index].length)    
+        elif indexList[index].typeID == 0x022B0008:
+            print("Chunk 0x08002B02 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002B02Chunk(index, indexList[index].name,  indexList[index].length)    
+        elif indexList[index].typeID == 0x022C0008:
+            print("Chunk 0x08002C02 - Index: %s - Name: %s - Address: %s - Length: %s" % (hex(index), indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002C02Chunk(index, indexList[index].name,  indexList[index].length)    
+        elif indexList[index].typeID == 0x022D0008:
+            print("Chunk 0x08002D02 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002D02Chunk(index, indexList[index].name,  indexList[index].length)    
+        elif indexList[index].typeID == 0x022E0008:
+            print("Chunk 0x08002E02 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002E02Chunk(index, indexList[index].name,  indexList[index].length)    
+        elif indexList[index].typeID == 0x02300008:
+            print("Chunk 0x08003002 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08003002Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02330008:
+            print("Chunk 0x08003302 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08003302Chunk(index, indexList[index].name,  indexList[index].length)                 
+        elif indexList[index].typeID % 0x10000 == 0x0009:
+            print("Chunk 0x0900xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0900Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0011:
+            print("Chunk 0x1100xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x1100Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x000f:
+            print("Chunk 0x0f00xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x0f00Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0010:
+            print("Chunk 0x1000xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x1000Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x03030014:
+            print("Chunk 0x14000303 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x14000303Chunk(index, indexList[index].name,  indexList[index].length)
+        else:
+            chunkType = hex(indexList[index].typeID)[2:]
+            while len(chunkType) != 8:
+                chunkType = "0" + chunkType
+            print("\n------ Warning: Unknown Chunk, skipped 0x%s ------" % (chunkType[6:8]+chunkType[4:6]+chunkType[2:4]+chunkType[0:2]))
+            #noesis.doException("Unknown Chunk, skipped 0x %s" % chunkType[6:8]+chunkType[4:6]+chunkType[2:4]+chunkType[0:2])
+        bs.seek(origonalOffset, NOESEEK_ABS)
     else:
-        print("Unknown Chunk, skipped %s" % hex(indexList[index].typeID))
-    bs.seek(origonalOffset, NOESEEK_ABS)
+        print("Negative Index, skipped %i" % index)
     return result
 
 
@@ -333,21 +389,46 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
         print("Child Bone: ", end='')
         print(childList)
         '''
-      print("Rotation: %f %f %f %f" % (rotation[0],rotation[1],rotation[2],rotation[3]))
-      print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
-      print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
-      print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
-      print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
-      '''
+        print("Rotation: %f %f %f %f" % (rotation[0],rotation[1],rotation[2],rotation[3]))
+        print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
+        print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
+        print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
+        print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
+        '''
 
     if parentID != -1:
         print("Globalizing Bone %i x %i " % (index, parentID))
         boneMatrix *= bones[parentID].getMatrix()  # Globalization
 
-    bones[index] = NoeBone(index, boneName, boneMatrix, None, parentID)
+    if "PointLight" in boneName:
+        boneName = loadChunk(childList[0]) #Pretty sure there's only gonna be 1
+        bones[index] = NoeBone(index, boneName, boneMatrix, None, 0)
+    else:
+        bones[index] = NoeBone(index, boneName, boneMatrix, None, parentID)
+        global LOD
+        LOD_Triggered = False
+        if LOD_suffix and LOD == "":
+            if boneName == "low":
+                LOD = "_LOD2"
+                LOD_Triggered = True
+            elif boneName == "middle":
+                LOD = "_LOD1"
+                LOD_Triggered = True
+            elif boneName == "near":
+                LOD = "_LOD0"
+                LOD_Triggered = True
+            elif boneName == "grass":
+                LOD = "_GRASS"
+                LOD_Triggered = True
+            if LOD_Triggered:
+                print("LOD Flag set")
 
-    for childIndex in childList:
-        loadChunk(childIndex)
+        for childIndex in childList:
+            loadChunk(childIndex)
+
+        if LOD_Triggered == True:
+            print("Cleared LOD Flag")
+            LOD = ""
 
     return
 
@@ -359,15 +440,17 @@ def load0x0300Chunk(index, name, length):  # Mesh Data Pointer
     length = bs.readUInt()
     bs.seek(offsetFromMeshChunk + pointerOfMeshChunk, NOESEEK_ABS)
     if typeID == 0x01010000:  # VertexData
-        print("Loading Mesh Vertex - Index: %s - Name: %s - Address: %s" %
-              (len(meshInfos), name, hex(bs.tell())))
+        print("Loading Mesh Vertex - Index: %s - Name: %s - Address: %s" %(len(meshInfos), name, hex(bs.tell())))
         loadMeshVertex(meshInfos[-1].vertexCount, meshInfos[-1].vertexStruct)
     elif typeID == 0x01020000:  # FaceData
-        print("Loading Mesh Face - Index: %s - Name: %s - Address: %s" %
-              (len(meshInfos), name, hex(bs.tell())))
+        print("Loading Mesh Face - Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
         loadMeshFace(meshInfos[-1].faceCount[-1])
     elif typeID == 0x01140000:  # WeightData
+        print("Loading Vertex Weight - Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
         loadMeshWeight(meshInfos[-1].vertexCount, meshInfos[-1].boneMap)
+    elif typeID == 0x010A0000:  # Reverse Binding
+        print("Loading Reverse Binding - Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
+        loadReverseBinding(meshInfos[-1].boneMap)
 
 def load0x0400Chunk(index, name, length):  # Mesh Info
     global currentMesh
@@ -385,12 +468,16 @@ def load0x0400Chunk(index, name, length):  # Mesh Info
         indexOf0x0600Chunk.append(bs.readUInt() - 1)
     # bs.seek() TODO - seek to Subchunk 2
     name = name.split('/')[-1].split("Shape")[0]
-    print("Mesh detected - Name: %s Mesh Index: %i Global Index: %i Submesh count: %i" % (name, currentMesh, index, numOfFaceChunk))
+    print("Mesh detected - Name: %s Mesh Index: %i Global Index: %i Submesh count: %i " % (name, currentMesh, index, numOfFaceChunk), end="")
+    if LOD == "":
+        print("LOD Level: None")
+    else:
+        print("LOD Level: " + LOD[1:])
     print("Index Of 0x0500 Chunk: %s" % hex(indexOf0x0500Chunk))
     print("Index Of 0x0600 Chunk: ", end='')
     print([hex(x) for x in indexOf0x0600Chunk])
-    meshs.append(NoeMesh([], [], name))
-    meshInfos.append(MeshInfo(index, name, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk[i]))
+    meshs.append(NoeMesh([], [], name + LOD))
+    meshInfos.append(MeshInfo(index, name + LOD, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk[i]))
 
     loadChunk(indexOf0x0500Chunk)  # Load Vertex Chain
 
@@ -401,21 +488,22 @@ def load0x0400Chunk(index, name, length):  # Mesh Info
         meshInfos[-1].setIndexOf0x0600Chunk([indexOf0x0600Chunk[0]])
         loadChunk(indexOf0x0600Chunk[0]) #Load First Chain
         if numOfFaceChunk > 1:
-            meshs[-1].setName(name + "_0")
+            meshs[-1].setName(name + "_0" + LOD)
             meshInfos[-1].setName(meshs[-1].name)
 
             for i in range(1, numOfFaceChunk):  #Load Face Chain
                 meshs.append(copy.deepcopy(meshs[-1]))
-                meshs[-1].setName(name + '_' + str(i))
+                meshs[-1].setName(name + '_' + str(i) + LOD)
                 meshs[-1].setIndices([])
                 meshInfos.append(copy.deepcopy(meshInfos[-1]))
                 meshInfos[-1].initialize0x0600ChunkInfo()
                 meshInfos[-1].setIndexOf0x0600Chunk([indexOf0x0600Chunk[0]])
                 meshInfos[-1].setName(meshs[-1].name)
                 print("Loading sub mesh %s" % meshs[-1].name)
-                loadChunk(indexOf0x0600Chunk[i])
+                loadChunk(indexOf0x0600Chunk[i])    
     else:
-        meshInfos.append(MeshInfo(index, name, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk))
+        meshs[-1].setName(name + LOD)
+        meshInfos.append(MeshInfo(index, meshs[-1].name, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk))
         for i in indexOf0x0600Chunk:  # Load Face Chain
             loadChunk(i)
     
@@ -441,50 +529,230 @@ def load0x0500Chunk(index, name, length):
 
 
 def load0x0600Chunk(index, name, length):
-    indexOf0x08002202Chunk = bs.readUInt() - 1
+    indexOf0x0800Chunk = bs.readUInt() - 1
     indexOf0x03000201Chunk = bs.readUInt() - 1
     faceCount = bs.readUShort()
     # Just gonna ignore those unknown data in between rn
     bs.seek(12, NOESEEK_REL)
     faceIndex = bs.readUShort()
-    meshInfos[-1].loadFaceInfo(indexOf0x08002202Chunk,indexOf0x03000201Chunk, faceCount, faceIndex)
+    meshInfos[-1].loadFaceInfo(indexOf0x0800Chunk,indexOf0x03000201Chunk, faceCount, faceIndex)
+    meshs[-1].setMaterial(indexList[indexOf0x0800Chunk].customName)
 
     # Load material
-    loadChunk(indexOf0x08002202Chunk)
+    #loadChunk(indexOf0x0800Chunk)
 
     loadChunk(indexOf0x03000201Chunk)
 
 
+def load0x08000102Chunk(index, name, length):
+    material = NoeMaterial("01-" + name[1:], "")
+    indexList[index].setCustomName(material.name)
+    '''
+    header = bs.readUInt()
+    subchunkID = []
+    for i in range(3):
+        subchunkID.append(bs.readUInt() - 1)
+
+    print("0x08000102 Chunk, %s, " % hex(header), end = '')
+    [print(hex(x)+', ', end = '') for x in subchunkID]
+    print()
+
+    for i in range(2):
+        loadChunk(subchunkID[i])
+    '''
+    addMaterial(material)
+
+def load0x08002002Chunk(index, name, length):
+    material = NoeMaterial("20-" + name[1:], "")
+    indexList[index].setCustomName(material.name)
+    addMaterial(material)
+
 def load0x08002202Chunk(index, name, length):
-    bs.seek(4, NOESEEK_REL)
-    # We only load 1, the main texture for now
-    indexOf0x0900Chunk = bs.readUInt() - 1
-    loadChunk(indexOf0x0900Chunk)
+    header = bs.readUInt()
+    texture = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1)
+    eye_refelection = loadChunk(bs.readUInt() - 1)
+    detail = loadChunk(bs.readUInt() - 1)
+    eye = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("22-%s-%s-%s-%s" % (texture, eye_refelection, detail, eye), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    material.setNormalTexture(normal)
+    #material.setUserData(b"eye refl", eye_refelection)
+    #material.setUserData(b"detail  ", detail)
+    #material.setUserData(b"eye     ", eye)
+    addMaterial(material)
 
 def load0x08002302Chunk(index, name, length):
-    bs.seek(12, NOESEEK_REL)
-    # We only load 1, the main texture for now
-    indexOf0x0900Chunk = bs.readUInt() - 1
-    loadChunk(indexOf0x0900Chunk)
+    header1 = bs.readUInt()
+    header2 = bs.readUInt()
+    materialType = getNameFromHash(bs.readUInt())
+    texture = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1)
+    specular = loadChunk(bs.readUInt() - 1)
+    texture2 = loadChunk(bs.readUInt() - 1)
+    normal2 = loadChunk(bs.readUInt() - 1)
+    #print("Material Loaded - %s - %s - %s - %s - %s - %s" % (materialType, texture, normal, specular, texture2, normal2))
+    material = NoeMaterial("23-%s-%s-%s-%s" % (materialType, texture, texture2, specular), "")
+    indexList[index].setCustomName(material.name)
+    #material.setUserData(b"material",  materialType)
+    material.setTexture(texture)
+    material.setNormalTexture(normal)
+    material.setSpecularTexture(specular)
+    #material.setUserData(b"color2  ", texture2)
+    #material.setUserData(b"normal2 ", normal2)
+    addMaterial(material)
 
 def load0x08002402Chunk(index, name, length):
-    bs.seek(144, NOESEEK_REL)
-    # We only load 1, the main texture for now
-    indexOf0x0900Chunk = bs.readUInt() - 1
-    loadChunk(indexOf0x0900Chunk)
+    header1 = bs.readUInt()
+    header2 = bs.readUInt()
+    data = []
+    data.append("Data Chunk 1")
+    for i in range(17):
+        data.append(bs.readFloat())
+    effect = loadChunk(bs.readUInt() - 1)
+    data.append("Data Chunk 2")
+    for i in range(16):
+        data.append(bs.readFloat()) 
+    texture = loadChunk(bs.readUInt() - 1)
+    unknown1 = loadChunk(bs.readUInt() - 1)
+    unknown2 = loadChunk(bs.readUInt() - 1)
+    unknown3 = loadChunk(bs.readUInt() - 1)
+    data.append("Data Chunk 3")
+    for i in range(16):
+        data.append(bs.readFloat())
+    material = NoeMaterial("24-%s-%s-%s-%s-%s" % (texture, effect, unknown1, unknown2, unknown3), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    #material.setUserData(b'effect  ', effect)
+    #material.setUserData(b'unknown1 ', unknown1)
+    #material.setUserData(b'unknown2 ', unknown2)
+    #material.setUserData(b'unknown3 ', unknown3)
+    addMaterial(material)
+
+def load0x08002802Chunk(index, name, length):
+    bs.seek(0x64, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("30-%s" % texture, "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    addMaterial(material)
+
+def load0x08002902Chunk(index, name, length):
+    data = []
+    data.append("Data Chunk 1")
+    for i in range(7):
+        data.append(bs.readFloat())
+    subchunkID = []
+    texture = loadChunk(bs.readUInt() - 1)
+    data.append("Data Chunk 2")
+    for i in range(12):
+        data.append(bs.readFloat())
+    normal = loadChunk(bs.readUInt() - 1)
+    data.append("Data Chunk 3")
+    for i in range(3):
+        data.append(bs.readFloat())
+    material = NoeMaterial("29-%s" % (texture), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    material.setNormalTexture(normal)
+    addMaterial(material)
+
+def load0x08002A02Chunk(index, name, length):
+    material = NoeMaterial("2A-" + name[1:], "")
+    indexList[index].setCustomName(material.name)
+    addMaterial(material)
+
+def load0x08002B02Chunk(index, name, length):
+    header1 = bs.readUInt()
+    header2 = bs.readUInt()
+    texture = loadChunk(bs.readUInt() - 1)
+    texture2 = loadChunk(bs.readUInt() - 1)
+    texture3 = loadChunk(bs.readUInt() - 1)
+    texture4 = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1)
+    normal2 = loadChunk(bs.readUInt() - 1)
+    normal3 = loadChunk(bs.readUInt() - 1)
+    normal4 = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("2B-%s-%s-%s-%s" % (texture,texture2,texture3,texture4), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    material.setNormalTexture(normal)
+    # material.setUserData(b'color2  ', loadChunk(bs.readUInt() - 1))
+    # material.setUserData(b'color3  ', loadChunk(bs.readUInt() - 1))
+    # material.setUserData(b'color4  ', loadChunk(bs.readUInt() - 1))
+    # material.setUserData(b'normal2 ', loadChunk(bs.readUInt() - 1))
+    # material.setUserData(b'normal3 ', loadChunk(bs.readUInt() - 1))
+    # material.setUserData(b'normal4 ', loadChunk(bs.readUInt() - 1))
+    addMaterial(material)
+
+def load0x08002C02Chunk(index, name, length):
+    bs.seek(0x8, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1)
+    interior = loadChunk(bs.readUInt() - 1)
+    unknown = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("2C-%s-%s" % (texture,interior), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    material.setNormalTexture(normal)
+    addMaterial(material)
+
+def load0x08002D02Chunk(index, name, length):
+    bs.seek(0x30, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    texture2 = loadChunk(bs.readUInt() - 1)
+    bs.seek(0x48, NOESEEK_REL)
+    texture3 = loadChunk(bs.readUInt() - 1)
+    texture4 = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("2D-%s-%s-%s-%s" % (texture,texture2,texture3,texture4), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    addMaterial(material)
+
+def load0x08002E02Chunk(index, name, length):
+    bs.seek(0x8, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("2E-%s" % texture, "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    addMaterial(material)
+
+def load0x08003002Chunk(index, name, length):
+    bs.seek(0x8, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("30-%s" % texture, "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture)
+    material.setNormalTexture(normal)
+    addMaterial(material)
 
 def load0x08003302Chunk(index, name, length):
-    bs.seek(12, NOESEEK_REL)
-    # We only load 1, the main texture for now
-    indexOf0x0900Chunk = bs.readUInt() - 1
-    loadChunk(indexOf0x0900Chunk)
-
+    material = NoeMaterial("33-" + name[1:], "")
+    indexList[index].setCustomName(material.name)
+    '''
+        header1 = bs.readUInt()
+    subchunkID = []
+    for i in range(4):
+        subchunkID.append(bs.readUInt() - 1)
+    data = []
+    for i in range(7):
+        data.append(bs.readFloat())
+    '''
+    addMaterial(material)
 
 def load0x0900Chunk(index, name, length):
     indexOf0x1100Chunk = bs.readUInt() - 1
-    if indexOf0x1100Chunk != 0:
-        loadChunk(indexOf0x1100Chunk)
+    if indexOf0x1100Chunk != -1:
+        return loadChunk(indexOf0x1100Chunk)
+    return ''
 
+def load0x1100Chunk(index, name, length):
+    bs.seek(12, NOESEEK_REL)
+    lengthOfTextureString = bs.readUInt()
+    textureString = bs.readBytes(lengthOfTextureString).decode('ASCII').rstrip("\0")
+    return textureString
 
 def load0x1000Chunk(index, name, length):
     numOfBone = bs.readUInt()  # weighted bone of the mesh
@@ -505,28 +773,23 @@ def load0x1000Chunk(index, name, length):
         print("0x1000 Chunk Out Of Order!!!! %s %s" % (hex(parent0x0400ID), hex(meshInfos[-1].index)))
         input()
 
-    # I don't know what 0x03001401 does for now, let just load 0x3001401
+    # if "obj_hair" in meshInfos[-1].name:
+    loadChunk(indexOf0x03000A01Chunk)
 
     loadChunk(indexOf0x03001401Chunk)
-
-
-def load0x1100Chunk(index, name, length):
-    bs.seek(12, NOESEEK_REL)
-    lengthOfTextureString = bs.readUInt()
-    textureString = bs.readBytes(
-        lengthOfTextureString).decode('ASCII').rstrip("\0")
-    print("Texture loaded: %s" % textureString)
-    if meshs[-1].matName == "default" or seperate_sub_mesh:
-        meshs[-1].setMaterial(textureString)
-    elif (textureString in meshs[-1].matName) == False:
-        meshs[-1].setMaterial(meshs[-1].matName + " + " + textureString)
-    meshInfos[-1].loadTexture(textureString)
 
 
 def load0x0f00Chunk(index, name, length):
     bs.seek(8, NOESEEK_REL)
     indexOf0x1000Chunk = bs.readUInt() - 1
     loadChunk(indexOf0x1000Chunk)
+
+def load0x14000303Chunk(index, name, length):
+    intensity = bs.readFloat()
+    R = bs.readFloat()
+    G = bs.readFloat()
+    B = bs.readFloat()
+    return "PL%i-%s-%s-%s-%s" % (index, str(round(intensity, 4)), str(round(R, 4)), str(round(G, 4)), str(round(B, 4)))
 
 # def load0x2b00Chunk(index, name, length):
 
@@ -538,6 +801,8 @@ def loadMeshVertex(vertexCount, vertexStruct):
     uvCount = vertexStruct.count(0x9E)
     print("UV Count: %i" % uvCount)
     uvs = [[]]*uvCount
+    normals = []
+    tangents = []
     for vertex in range(vertexCount):
         uvLoaded = 0
         for dataType in vertexStruct:
@@ -545,7 +810,9 @@ def loadMeshVertex(vertexCount, vertexStruct):
                 z = bs.readFloat() * global_scale
                 y = bs.readFloat() * global_scale
                 x = bs.readFloat() * global_scale
-                vertexs.append(NoeVec3((z, y, x)))
+                rawTransform = NoeVec3((z, y, x)) * bones[meshInfos[-1].parentID].getMatrix()
+                transform = NoeVec3((rawTransform.getStorage()[2], rawTransform.getStorage()[1], rawTransform.getStorage()[0]))
+                vertexs.append(transform)
             elif dataType == 0xA1:  # Unknown, skip
                 bs.seek(4, NOESEEK_REL)
             elif dataType == 0x9C:  # Unknown, skip
@@ -554,18 +821,24 @@ def loadMeshVertex(vertexCount, vertexStruct):
                 u = bs.readShort()/1024  
                 v = bs.readShort()/1024
                 if uvLoaded < 1: #Only load the first UV
-                  uvs[uvLoaded].append(NoeVec3((u, v, 0)))
+                    uvs[uvLoaded].append(NoeVec3((u, v, 0)))
                 uvLoaded += 1
                 '''
                 if u > 1 or u < -1 or v > 1 or v < -1:
-                  print("UV out of bound %f %f %i at %s" % (u, v, uvCount, hex(bs.tell()-4)))
+                    print("UV out of bound %f %f %i at %s" % (u, v, uvCount, hex(bs.tell()-4)))
                 '''
-            elif dataType == 0x88:  # Unknown, skip
+            elif dataType == 0x87:  # Normal
+                # normals.append(NoeVec3((bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat())))
+                # bs.seek(2, NOESEEK_REL)
                 bs.seek(8, NOESEEK_REL)
-            elif dataType == 0x87:  # Unknown, skip
+            elif dataType == 0x88:  # Tangent
+                # tangents.append(NoeVec3((bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat())))
+                # bs.seek(2, NOESEEK_REL)
                 bs.seek(8, NOESEEK_REL)
     meshs[-1].setPositions(vertexs)
     meshs[-1].setUVs(uvs[0])
+    #meshs[-1].setNormals(normals)
+    #meshs[-1].setTangents(tangents)
     '''
     for i in range(uvCount):
         meshs[-1].setUVs(uvs[i], i)
@@ -608,19 +881,38 @@ def loadMeshWeight(vertexCount, boneMap):
         weightList.append(NoeVertWeight(linkedBone, weight))
     meshs[-1].setWeights(weightList)
 
+def loadReverseBinding(boneMap):
+    print(hex(bs.tell()))
+    if reverse_binding:
+        for index in boneMap:
+            #print("Bone: " + bones[index].name)
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
+            reverse_binding_matrix = NoeMat44.fromBytes(bs.readBytes(64)).inverse().toMat43()
+            bones[index].setMatrix(reverse_binding_matrix)
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
+            #print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
+            
+    print(hex(bs.tell()))
+            
+
 def printMeshCSV():
-  print("Mesh CSV List ----------------------------------------")
-  print("Name\tIndex\tVertex Count\tSubmesh Count\tFace Count\tTexture\tType Of Material\tVertex Struct\tIndex Of 0x0500Chunk\tIndex Of 0x0600Chunk\tIndex Of 0x0800Chunk")
-  for meshInfo in meshInfos:
-    print(meshInfo.name, hex(meshInfo.index), meshInfo.vertexCount, meshInfo.numOfFaceChunk, meshInfo.faceCount, meshInfo.texture, [typeOf0x0800Chunk(x) for x in meshInfo.indexOf0x0800Chunk], [hex(x) for x in meshInfo.vertexStruct], hex(meshInfo.indexOf0x0500Chunk), [hex(x) for x in meshInfo.indexOf0x0600Chunk], [hex(x) for x in meshInfo.indexOf0x0800Chunk], sep="\t")
-  print("End of Mesh CSV List ----------------------------------------")
+    print("Mesh CSV List ----------------------------------------")
+    print("Name|Index|Vertex Count|Submesh Count|Face Count|Texture|Type Of Material|Vertex Struct|Index Of 0x0500Chunk|Index Of 0x0600Chunk|Index Of 0x0800Chunk")
+    for meshInfo in meshInfos:
+        print(meshInfo.name, hex(meshInfo.index), meshInfo.vertexCount, meshInfo.numOfFaceChunk, meshInfo.faceCount, meshInfo.texture, [typeOf0x0800Chunk(x) for x in meshInfo.indexOf0x0800Chunk], [hex(x) for x in meshInfo.vertexStruct], hex(meshInfo.indexOf0x0500Chunk), [hex(x) for x in meshInfo.indexOf0x0600Chunk], [hex(x) for x in meshInfo.indexOf0x0800Chunk], sep="|")
+    print("End of Mesh CSV List ----------------------------------------")
 
 def typeOf0x0800Chunk(index):
-  origonalOffset = bs.tell()
-  bs.seek(index*0x10 + 0x36, NOESEEK_ABS)
-  chunkType = hex(bs.readUShort()+ 0x10000)
-  bs.seek(origonalOffset, NOESEEK_ABS)
-  return chunkType[5:]+chunkType[3:5]
+    origonalOffset = bs.tell()
+    bs.seek(index*0x10 + 0x36, NOESEEK_ABS)
+    chunkType = hex(bs.readUShort()+ 0x10000)
+    bs.seek(origonalOffset, NOESEEK_ABS)
+    return chunkType[5:]+chunkType[3:5]
 
 def cleanUpMesh():
     for i in range(0, len(meshs)):
@@ -668,6 +960,12 @@ def cleanUpMesh():
         #Update mesh info
             meshInfos[i].setVertexCount(current_index + 1)
 
+def addMaterial(material):
+    for mat in materialList:
+        if material.name == mat.name:
+            return False
+    materialList.append(material)
+    return True
 
                 
     
