@@ -3,6 +3,8 @@
 # Reverse Engineered by 203Null and FreezeCook
 # Strcture Note: https://docs.google.com/document/d/1eW8BNMuE6chZebgClRnRoxRCEMDCAKPadYEhpK4AIV0/edit?usp=sharing
 
+#THIS VERSION IS NOT WORKING. JUST LEAVE HERE FOR ARCHIVE
+
 from inc_noesis import *
 import noesis
 import rapi
