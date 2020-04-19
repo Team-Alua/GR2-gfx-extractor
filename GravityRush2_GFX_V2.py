@@ -15,7 +15,7 @@ seperate_sub_mesh = True
 global_scale = 100
 remove_loose_vertice = True
 LOD_suffix = False
-reverse_binding = False
+reverse_binding = True
 
 
 def registerNoesisTypes():
@@ -113,14 +113,33 @@ class IndexChunk:
     def setCustomName(self, customName):
         self.customName = customName
 
+class BoneInfo:
+    def __init__(self, index, boneName, boneMatrix, parentID, isBone, childList):
+        self.index = index
+        self.boneName = boneName
+        self.boneMatrix = boneMatrix
+        self.globalMatrix = boneMatrix
+        self.parentID = parentID
+        self.isBone = isBone
+        self.childList = childList
+        self.reverseBindingMatrix = None
+        self.hasRPB = False
+    
+    def setReverseBindingMatrix(self, reverseBindingMatrix):
+        self.hasRPB = True
+        self.reverseBindingMatrix = reverseBindingMatrix
+        self.globalMatrix = reverseBindingMatrix
+
+    def setGlobalMatrix(self, globalMatrix):
+        self.globalMatrix = globalMatrix
 
 class MeshInfo:
     # Infomations from 0x0400 Chunk
-    def __init__(self, index, name, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk):
+    def __init__(self, index, name, numOfFaceChunk, parentID, indexOf0x0500Chunk, indexOf0x0600Chunk):
         self.index = index  # Global Index
         self.name = name
         self.numOfFaceChunk = numOfFaceChunk
-        self.parentID = parrentID
+        self.parentID = parentID
         self.indexOf0x0500Chunk = indexOf0x0500Chunk
         self.indexOf0x0600Chunk = indexOf0x0600Chunk
         self.initialize0x0600ChunkInfo()
@@ -243,12 +262,11 @@ def noepyLoadModel(data, mdlList):
         elif indexList[i].typeID == 0x0000002b:
             indexOf0x2b00Chunk.append(i)
     
-    
     for materialIndex in materialIndexs:
         loadChunk(materialIndex)
 
-    global bones
-    bones = [None] * numOfBone
+    global boneInfos
+    boneInfos = [None] * numOfBone
 
     # Load root 0x0200 Chunk
     for rootBone in rootBones:
@@ -256,6 +274,12 @@ def noepyLoadModel(data, mdlList):
 
     if remove_loose_vertice:
         cleanUpMesh()
+
+    global bones
+    bones = []
+
+    for rootBone in rootBones:
+        compileBones(rootBone)
 
     model = NoeModel(meshs)
     model.setModelMaterials(NoeModelMaterials([], materialList))
@@ -328,6 +352,9 @@ def loadChunk(index):
         elif indexList[index].typeID == 0x02300008:
             print("Chunk 0x08003002 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x08003002Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x02320008:
+            print("Chunk 0x08003202 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08003202Chunk(index, indexList[index].name,  indexList[index].length) 
         elif indexList[index].typeID == 0x02330008:
             print("Chunk 0x08003302 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x08003302Chunk(index, indexList[index].name,  indexList[index].length)                 
@@ -371,7 +398,7 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
 
     # Load Extra Infomation
     parentID = bs.readUInt() - 1
-    isBone = bs.readUShort()
+    isBone = bs.readUShort() == 1
 
     numOfChild = bs.readUShort()
     bs.seek(4, NOESEEK_REL)
@@ -388,23 +415,17 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
         print("Parent Bone: %i" % (parentID))
         print("Child Bone: ", end='')
         print(childList)
-        '''
-        print("Rotation: %f %f %f %f" % (rotation[0],rotation[1],rotation[2],rotation[3]))
-        print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
-        print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
-        print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
-        print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
-        '''
 
-    if parentID != -1:
-        print("Globalizing Bone %i x %i " % (index, parentID))
-        boneMatrix *= bones[parentID].getMatrix()  # Globalization
+    # if parentID != -1:
+    #     print("Globalizing Bone %i x %i " % (index, parentID))
+    #     boneMatrix *= bones[parentID].getMatrix()  # Globalization
 
     if "PointLight" in boneName:
         boneName = loadChunk(childList[0]) #Pretty sure there's only gonna be 1
-        bones[index] = NoeBone(index, boneName, boneMatrix, None, 0)
+        boneInfos[index] = BoneInfo(index, boneName, boneMatrix, -1, True, childList) #Use Bone as Empty
     else:
-        bones[index] = NoeBone(index, boneName, boneMatrix, None, parentID)
+        # if boneName[:3] != "dm_":
+        boneInfos[index] = BoneInfo(index, boneName, boneMatrix, parentID, isBone, childList)
         global LOD
         LOD_Triggered = False
         if LOD_suffix and LOD == "":
@@ -457,7 +478,7 @@ def load0x0400Chunk(index, name, length):  # Mesh Info
     # Header
     numOfFaceChunk = bs.readUShort()
     bs.seek(6, NOESEEK_REL)
-    parrentID = bs.readUInt() - 1
+    parentID = bs.readUInt() - 1
     bs.seek(4, NOESEEK_REL)
     # Subchunk 1
     indexOf0x0500Chunk = bs.readUInt() - 1
@@ -477,7 +498,7 @@ def load0x0400Chunk(index, name, length):  # Mesh Info
     print("Index Of 0x0600 Chunk: ", end='')
     print([hex(x) for x in indexOf0x0600Chunk])
     meshs.append(NoeMesh([], [], name + LOD))
-    meshInfos.append(MeshInfo(index, name + LOD, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk[i]))
+    meshInfos.append(MeshInfo(index, name + LOD, numOfFaceChunk, parentID, indexOf0x0500Chunk, indexOf0x0600Chunk[i]))
 
     loadChunk(indexOf0x0500Chunk)  # Load Vertex Chain
 
@@ -503,7 +524,7 @@ def load0x0400Chunk(index, name, length):  # Mesh Info
                 loadChunk(indexOf0x0600Chunk[i])    
     else:
         meshs[-1].setName(name + LOD)
-        meshInfos.append(MeshInfo(index, meshs[-1].name, numOfFaceChunk, parrentID, indexOf0x0500Chunk, indexOf0x0600Chunk))
+        meshInfos.append(MeshInfo(index, meshs[-1].name, numOfFaceChunk, parentID, indexOf0x0500Chunk, indexOf0x0600Chunk))
         for i in indexOf0x0600Chunk:  # Load Face Chain
             loadChunk(i)
     
@@ -728,6 +749,15 @@ def load0x08003002Chunk(index, name, length):
     material.setNormalTexture(normal)
     addMaterial(material)
 
+def load0x08003202Chunk(index, name, length):
+    bs.seek(0x8, NOESEEK_REL)
+    texture1 = loadChunk(bs.readUInt() - 1)
+    texture2 = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("32-%s-%s" % (texture1, texture2), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(texture1)
+    addMaterial(material)
+
 def load0x08003302Chunk(index, name, length):
     material = NoeMaterial("33-" + name[1:], "")
     indexList[index].setCustomName(material.name)
@@ -810,8 +840,9 @@ def loadMeshVertex(vertexCount, vertexStruct):
                 z = bs.readFloat() * global_scale
                 y = bs.readFloat() * global_scale
                 x = bs.readFloat() * global_scale
-                rawTransform = NoeVec3((z, y, x)) * bones[meshInfos[-1].parentID].getMatrix()
-                transform = NoeVec3((rawTransform.getStorage()[2], rawTransform.getStorage()[1], rawTransform.getStorage()[0]))
+                # rawTransform = NoeVec3((z, y, x)) * bones[meshInfos[-1].parentID].getMatrix()
+                # transform = NoeVec3((rawTransform.getStorage()[2], rawTransform.getStorage()[1], rawTransform.getStorage()[0]))
+                transform = NoeVec3((z, y, x))
                 vertexs.append(transform)
             elif dataType == 0xA1:  # Unknown, skip
                 bs.seek(4, NOESEEK_REL)
@@ -827,11 +858,11 @@ def loadMeshVertex(vertexCount, vertexStruct):
                 if u > 1 or u < -1 or v > 1 or v < -1:
                     print("UV out of bound %f %f %i at %s" % (u, v, uvCount, hex(bs.tell()-4)))
                 '''
-            elif dataType == 0x87:  # Normal
+            elif dataType == 0x88:  # Normal
                 # normals.append(NoeVec3((bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat())))
                 # bs.seek(2, NOESEEK_REL)
                 bs.seek(8, NOESEEK_REL)
-            elif dataType == 0x88:  # Tangent
+            elif dataType == 0x87:  # Tangent
                 # tangents.append(NoeVec3((bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat())))
                 # bs.seek(2, NOESEEK_REL)
                 bs.seek(8, NOESEEK_REL)
@@ -882,22 +913,15 @@ def loadMeshWeight(vertexCount, boneMap):
     meshs[-1].setWeights(weightList)
 
 def loadReverseBinding(boneMap):
-    print(hex(bs.tell()))
+    #print(hex(bs.tell()))
     if reverse_binding:
         for index in boneMap:
-            #print("Bone: " + bones[index].name)
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
             reverse_binding_matrix = NoeMat44.fromBytes(bs.readBytes(64)).inverse().toMat43()
-            bones[index].setMatrix(reverse_binding_matrix)
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[0][0],bones[index].getMatrix()[0][1],bones[index].getMatrix()[0][2]))
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[1][0],bones[index].getMatrix()[1][1],bones[index].getMatrix()[1][2]))
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[2][0],bones[index].getMatrix()[2][1],bones[index].getMatrix()[2][2]))
-            #print("%f \t %f \t %f" % (bones[index].getMatrix()[3][0],bones[index].getMatrix()[3][1],bones[index].getMatrix()[3][2]))
-            
-    print(hex(bs.tell()))
+            reverse_binding_matrix[3][0] *= global_scale
+            reverse_binding_matrix[3][1] *= global_scale
+            reverse_binding_matrix[3][2] *= global_scale
+            boneInfos[index-1].setReverseBindingMatrix(reverse_binding_matrix)
+    #print(hex(bs.tell()))
             
 
 def printMeshCSV():
@@ -966,6 +990,16 @@ def addMaterial(material):
             return False
     materialList.append(material)
     return True
+
+def compileBones(index):
+    if index < numOfBone:
+        bone = boneInfos[index]
+        if bone.hasRPB == False and bone.parentID != -1:
+            bone.setGlobalMatrix(bone.boneMatrix * boneInfos[bone.parentID].globalMatrix) #Globalize
+
+        bones.append(NoeBone(bone.index, bone.boneName, bone.globalMatrix, None, bone.parentID))
+        for child in bone.childList:
+            compileBones(child)
 
                 
     
