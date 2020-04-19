@@ -328,6 +328,9 @@ def loadChunk(index):
         elif indexList[index].typeID == 0x02240008:
             print("Chunk 0x08002402 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x08002402Chunk(index, indexList[index].name,  indexList[index].length)  
+        elif indexList[index].typeID == 0x02250008:
+            print("Chunk 0x08002502 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002502Chunk(index, indexList[index].name,  indexList[index].length) 
         elif indexList[index].typeID == 0x02280008:
             print("Chunk 0x08002802 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x08002802Chunk(index, indexList[index].name,  indexList[index].length)        
@@ -364,6 +367,9 @@ def loadChunk(index):
         elif indexList[index].typeID % 0x10000 == 0x0011:
             print("Chunk 0x1100xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x1100Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0012:
+            print("Chunk 0x1200xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            print("External LOD reference, unneeded, skip")
         elif indexList[index].typeID % 0x10000 == 0x000f:
             print("Chunk 0x0f00xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x0f00Chunk(index, indexList[index].name,  indexList[index].length)
@@ -373,6 +379,9 @@ def loadChunk(index):
         elif indexList[index].typeID == 0x03030014:
             print("Chunk 0x14000303 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x14000303Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x0000002d:
+            print("Chunk 0x2d000000 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x2d00Chunk(index, indexList[index].name,  indexList[index].length)
         else:
             chunkType = hex(indexList[index].typeID)[2:]
             while len(chunkType) != 8:
@@ -398,7 +407,7 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
 
     # Load Extra Infomation
     parentID = bs.readUInt() - 1
-    isBone = bs.readUShort() == 1
+    isBone = bs.readUShort() == 0x100
 
     numOfChild = bs.readUShort()
     bs.seek(4, NOESEEK_REL)
@@ -415,41 +424,44 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
         print("Parent Bone: %i" % (parentID))
         print("Child Bone: ", end='')
         print(childList)
+        print("Is Bone? %s" % str(isBone))
 
-    # if parentID != -1:
-    #     print("Globalizing Bone %i x %i " % (index, parentID))
-    #     boneMatrix *= bones[parentID].getMatrix()  # Globalization
-
-    if "PointLight" in boneName:
+    if "G2PointLight" in boneName or "G2DecalLocator" in boneName:
         boneName = loadChunk(childList[0]) #Pretty sure there's only gonna be 1
-        boneInfos[index] = BoneInfo(index, boneName, boneMatrix, -1, True, childList) #Use Bone as Empty
-    else:
-        # if boneName[:3] != "dm_":
-        boneInfos[index] = BoneInfo(index, boneName, boneMatrix, parentID, isBone, childList)
-        global LOD
-        LOD_Triggered = False
-        if LOD_suffix and LOD == "":
-            if boneName == "low":
-                LOD = "_LOD2"
-                LOD_Triggered = True
-            elif boneName == "middle":
-                LOD = "_LOD1"
-                LOD_Triggered = True
-            elif boneName == "near":
-                LOD = "_LOD0"
-                LOD_Triggered = True
-            elif boneName == "grass":
-                LOD = "_GRASS"
-                LOD_Triggered = True
-            if LOD_Triggered:
-                print("LOD Flag set")
+        parentID = -1
+        isBone = True
+    # elif "atg" in name:
+    #     isBone = True
 
-        for childIndex in childList:
-            loadChunk(childIndex)
+    boneInfos[index] = BoneInfo(index, boneName, boneMatrix, parentID, isBone, childList)
+    global LOD
+    LOD_Triggered = False
+    if LOD_suffix and LOD == "":
+        if boneName == "low":
+            LOD = "_LOD2"
+            LOD_Triggered = True
+        elif boneName == "middle":
+            LOD = "_LOD1"
+            LOD_Triggered = True
+        elif boneName == "near":
+            LOD = "_LOD0"
+            LOD_Triggered = True
+        elif boneName == "grass":
+            LOD = "_GRASS"
+            LOD_Triggered = True
+        if LOD_Triggered:
+            print("LOD Flag set")
+    
+    if parentID != -1:
+        print("Globalizing Bone %i x %i " % (index, parentID))
+        boneInfos[index].setGlobalMatrix(boneMatrix * boneInfos[parentID].globalMatrix) #Globalize
 
-        if LOD_Triggered == True:
-            print("Cleared LOD Flag")
-            LOD = ""
+    for childIndex in childList:
+        loadChunk(childIndex)
+
+    if LOD_Triggered == True:
+        print("Cleared LOD Flag")
+        LOD = ""
 
     return
 
@@ -651,6 +663,23 @@ def load0x08002402Chunk(index, name, length):
     #material.setUserData(b'unknown3 ', unknown3)
     addMaterial(material)
 
+def load0x08002502Chunk(index, name, length):
+    bs.seek(16, NOESEEK_REL)
+    unknown1 = loadChunk(bs.readUInt() - 1)
+    unknown2 = loadChunk(bs.readUInt() - 1)
+    unknown3 = loadChunk(bs.readUInt() - 1)
+    unknown4 = loadChunk(bs.readUInt() - 1)
+    unknown5 = loadChunk(bs.readUInt() - 1)
+    unknown6 = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("25-%s-%s-%s-%s-%s-%s" % (unknown1, unknown2, unknown3, unknown4, unknown5, unknown6), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(unknown1)
+    #material.setUserData(b'effect  ', effect)
+    #material.setUserData(b'unknown1 ', unknown1)
+    #material.setUserData(b'unknown2 ', unknown2)
+    #material.setUserData(b'unknown3 ', unknown3)
+    addMaterial(material)
+
 def load0x08002802Chunk(index, name, length):
     bs.seek(0x64, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
@@ -821,6 +850,11 @@ def load0x14000303Chunk(index, name, length):
     B = bs.readFloat()
     return "PL%i-%s-%s-%s-%s" % (index, str(round(intensity, 4)), str(round(R, 4)), str(round(G, 4)), str(round(B, 4)))
 
+def load0x2d00Chunk(index, name, length):
+    bs.seek(4, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1) 
+    return "DC%i-%s" % (index, texture)
 # def load0x2b00Chunk(index, name, length):
 
 # def load0x3100Chunk(index, name, length):
@@ -840,9 +874,9 @@ def loadMeshVertex(vertexCount, vertexStruct):
                 z = bs.readFloat() * global_scale
                 y = bs.readFloat() * global_scale
                 x = bs.readFloat() * global_scale
-                # rawTransform = NoeVec3((z, y, x)) * bones[meshInfos[-1].parentID].getMatrix()
-                # transform = NoeVec3((rawTransform.getStorage()[2], rawTransform.getStorage()[1], rawTransform.getStorage()[0]))
-                transform = NoeVec3((z, y, x))
+                rawTransform = NoeVec3((z, y, x)) * boneInfos[meshInfos[-1].parentID].globalMatrix
+                transform = NoeVec3((rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2]))
+                #transform = NoeVec3((x, y, z))
                 vertexs.append(transform)
             elif dataType == 0xA1:  # Unknown, skip
                 bs.seek(4, NOESEEK_REL)
@@ -994,6 +1028,7 @@ def addMaterial(material):
 def compileBones(index):
     if index < numOfBone:
         bone = boneInfos[index]
+        # if bone.isBone:
         if bone.hasRPB == False and bone.parentID != -1:
             bone.setGlobalMatrix(bone.boneMatrix * boneInfos[bone.parentID].globalMatrix) #Globalize
 
