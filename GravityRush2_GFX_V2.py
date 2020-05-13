@@ -9,11 +9,11 @@ import rapi
 import os
 import copy
 
-debug = True  # please change to False out when done.
+debug = False  # please change to False out when done.
 print_CSV = False
 seperate_sub_mesh = True
 global_scale = 100
-remove_loose_vertice = False
+remove_loose_vertice = True
 LOD_suffix = False
 reverse_binding = True
 export_normal_and_tangent = False #Experimental
