@@ -9,13 +9,16 @@ import rapi
 import os
 import copy
 
-debug = False  # please change to False out when done.
+debug = True  # please change to False out when done.
 print_CSV = False
 seperate_sub_mesh = True
 global_scale = 100
-remove_loose_vertice = True
+remove_loose_vertice = False
 LOD_suffix = False
 reverse_binding = True
+export_normal_and_tangent = False #Experimental
+print_material = False
+print_vertice_csv = False
 
 
 def registerNoesisTypes():
@@ -183,6 +186,34 @@ class MeshInfo:
     def setVertexCount(self, vertexCount):
         self.vertexCount = vertexCount
 
+class MaterialInfo:
+    def __init__(self, index, chunkType, name, data = []):
+        self.index = index
+        self.chunkType = chunkType
+        self.name = name.split("/")[-1]
+        self.addMaterialData(data)
+        self.textureList = []
+    
+    def addMaterialData(self, data):
+        for i in range(len(data)):
+            if type(data[i]) == float:
+                data[i] = round(data[i], 3)
+        self.data = data
+
+    def addTextureData(self, index, data):
+        for value in data:
+            if type(value) == float:
+                value = round(value, 3)
+        self.textureList.append([index, data, "No Texture", None])
+
+    def addTexture(self, filename):
+        self.textureList[-1][2] = filename
+
+    def addTextureAtlas(self, data):
+        for i in range(len(data)):
+            if type(data[i]) == float:
+                data[i] = round(data[i], 3)
+        self.textureList[-1][3] = data
 
 def noepyLoadModel(data, mdlList):
     # Initialization
@@ -236,6 +267,8 @@ def noepyLoadModel(data, mdlList):
 
     global materialList
     materialList = []
+    global materialInfoList
+    materialInfoList = []
 
     materialIndexs = []
 
@@ -289,6 +322,9 @@ def noepyLoadModel(data, mdlList):
     if print_CSV:
         printMeshCSV()
 
+    if print_material:
+        printMaterial()
+
     return 1
 
 
@@ -328,6 +364,9 @@ def loadChunk(index):
         elif indexList[index].typeID == 0x02240008:
             print("Chunk 0x08002402 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x08002402Chunk(index, indexList[index].name,  indexList[index].length)  
+        elif indexList[index].typeID == 0x02250008:
+            print("Chunk 0x08002502 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x08002502Chunk(index, indexList[index].name,  indexList[index].length) 
         elif indexList[index].typeID == 0x02280008:
             print("Chunk 0x08002802 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x08002802Chunk(index, indexList[index].name,  indexList[index].length)        
@@ -364,6 +403,9 @@ def loadChunk(index):
         elif indexList[index].typeID % 0x10000 == 0x0011:
             print("Chunk 0x1100xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x1100Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID % 0x10000 == 0x0012:
+            print("Chunk 0x1200xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            print("External LOD reference, unneeded, skip")
         elif indexList[index].typeID % 0x10000 == 0x000f:
             print("Chunk 0x0f00xxxx - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x0f00Chunk(index, indexList[index].name,  indexList[index].length)
@@ -373,6 +415,9 @@ def loadChunk(index):
         elif indexList[index].typeID == 0x03030014:
             print("Chunk 0x14000303 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
             result = load0x14000303Chunk(index, indexList[index].name,  indexList[index].length)
+        elif indexList[index].typeID == 0x0000002d:
+            print("Chunk 0x2d000000 - Name: %s - Address: %s - Length: %s" % (indexList[index].name, hex(indexList[index].offsetFromDataChunk + pointerOfDataChunk), hex(indexList[index].length)))
+            result = load0x2d00Chunk(index, indexList[index].name,  indexList[index].length)
         else:
             chunkType = hex(indexList[index].typeID)[2:]
             while len(chunkType) != 8:
@@ -398,7 +443,7 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
 
     # Load Extra Infomation
     parentID = bs.readUInt() - 1
-    isBone = bs.readUShort() == 1
+    isBone = bs.readUShort() == 0x100
 
     numOfChild = bs.readUShort()
     bs.seek(4, NOESEEK_REL)
@@ -415,41 +460,44 @@ def load0x0200Chunk(index, name, length):  # Object/Bone tree
         print("Parent Bone: %i" % (parentID))
         print("Child Bone: ", end='')
         print(childList)
+        print("Is Bone? %s" % str(isBone))
 
-    # if parentID != -1:
-    #     print("Globalizing Bone %i x %i " % (index, parentID))
-    #     boneMatrix *= bones[parentID].getMatrix()  # Globalization
-
-    if "PointLight" in boneName:
+    if "G2PointLight" in boneName or "G2DecalLocator" in boneName:
         boneName = loadChunk(childList[0]) #Pretty sure there's only gonna be 1
-        boneInfos[index] = BoneInfo(index, boneName, boneMatrix, -1, True, childList) #Use Bone as Empty
-    else:
-        # if boneName[:3] != "dm_":
-        boneInfos[index] = BoneInfo(index, boneName, boneMatrix, parentID, isBone, childList)
-        global LOD
-        LOD_Triggered = False
-        if LOD_suffix and LOD == "":
-            if boneName == "low":
-                LOD = "_LOD2"
-                LOD_Triggered = True
-            elif boneName == "middle":
-                LOD = "_LOD1"
-                LOD_Triggered = True
-            elif boneName == "near":
-                LOD = "_LOD0"
-                LOD_Triggered = True
-            elif boneName == "grass":
-                LOD = "_GRASS"
-                LOD_Triggered = True
-            if LOD_Triggered:
-                print("LOD Flag set")
+        parentID = -1
+        isBone = True
+    # elif "atg" in name:
+    #     isBone = True
 
-        for childIndex in childList:
-            loadChunk(childIndex)
+    boneInfos[index] = BoneInfo(index, boneName, boneMatrix, parentID, isBone, childList)
+    global LOD
+    LOD_Triggered = False
+    if LOD_suffix and LOD == "":
+        if boneName == "low":
+            LOD = "_LOD2"
+            LOD_Triggered = True
+        elif boneName == "middle":
+            LOD = "_LOD1"
+            LOD_Triggered = True
+        elif boneName == "near":
+            LOD = "_LOD0"
+            LOD_Triggered = True
+        elif boneName == "grass":
+            LOD = "_GRASS"
+            LOD_Triggered = True
+        if LOD_Triggered:
+            print("LOD Flag set")
+    
+    if parentID != -1:
+        print("Globalizing Bone %i x %i " % (index, parentID))
+        boneInfos[index].setGlobalMatrix(boneMatrix * boneInfos[parentID].globalMatrix) #Globalize
 
-        if LOD_Triggered == True:
-            print("Cleared LOD Flag")
-            LOD = ""
+    for childIndex in childList:
+        loadChunk(childIndex)
+
+    if LOD_Triggered == True:
+        print("Cleared LOD Flag")
+        LOD = ""
 
     return
 
@@ -472,6 +520,15 @@ def load0x0300Chunk(index, name, length):  # Mesh Data Pointer
     elif typeID == 0x010A0000:  # Reverse Binding
         print("Loading Reverse Binding - Index: %s - Name: %s - Address: %s" % (len(meshInfos), name, hex(bs.tell())))
         loadReverseBinding(meshInfos[-1].boneMap)
+    elif typeID == 0x011A0000: #Tree Leaves
+        print("Loading Leaves Vertex - Index: %s - Name: %s - Address: %s" %(len(meshInfos), name, hex(bs.tell())))
+        loadLeaves(meshInfos[-1].vertexCount, meshInfos[-1].vertexStruct)
+    elif typeID == 0x011B0000: #Grass
+        print("Loading Grass Vertex - Index: %s - Name: %s - Address: %s" %(len(meshInfos), name, hex(bs.tell())))
+        loadGrass(meshInfos[-1].vertexCount, meshInfos[-1].vertexStruct)
+    else:
+        chunkType = hex(typeID)[2:]
+        print("Unknown Data Chunk: 0x%s" % (chunkType[6:8]+chunkType[4:6]+chunkType[2:4]+chunkType[0:2]))
 
 def load0x0400Chunk(index, name, length):  # Mesh Info
     global currentMesh
@@ -566,6 +623,7 @@ def load0x0600Chunk(index, name, length):
 
 
 def load0x08000102Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "01", name))
     material = NoeMaterial("01-" + name[1:], "")
     indexList[index].setCustomName(material.name)
     '''
@@ -584,17 +642,23 @@ def load0x08000102Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002002Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "20", name))
     material = NoeMaterial("20-" + name[1:], "")
     indexList[index].setCustomName(material.name)
     addMaterial(material)
 
 def load0x08002202Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "22", name))
     header = bs.readUInt()
     texture = loadChunk(bs.readUInt() - 1)
     normal = loadChunk(bs.readUInt() - 1)
     eye_refelection = loadChunk(bs.readUInt() - 1)
     detail = loadChunk(bs.readUInt() - 1)
     eye = loadChunk(bs.readUInt() - 1)
+    data = [header]
+    for i in range(64):
+        data.append(bs.readFloat())
+    materialInfoList[-1].addMaterialData(data)
     material = NoeMaterial("22-%s-%s-%s-%s" % (texture, eye_refelection, detail, eye), "")
     indexList[index].setCustomName(material.name)
     material.setTexture(texture)
@@ -605,6 +669,7 @@ def load0x08002202Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002302Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "23", name))
     header1 = bs.readUInt()
     header2 = bs.readUInt()
     materialType = getNameFromHash(bs.readUInt())
@@ -613,7 +678,12 @@ def load0x08002302Chunk(index, name, length):
     specular = loadChunk(bs.readUInt() - 1)
     texture2 = loadChunk(bs.readUInt() - 1)
     normal2 = loadChunk(bs.readUInt() - 1)
-    #print("Material Loaded - %s - %s - %s - %s - %s - %s" % (materialType, texture, normal, specular, texture2, normal2))
+
+    data = [header1, header2, materialType]
+    for i in range(20):
+        data.append(bs.readFloat())
+    
+    materialInfoList[-1].addMaterialData(data)
     material = NoeMaterial("23-%s-%s-%s-%s" % (materialType, texture, texture2, specular), "")
     indexList[index].setCustomName(material.name)
     #material.setUserData(b"material",  materialType)
@@ -625,9 +695,10 @@ def load0x08002302Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002402Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "24", name))
     header1 = bs.readUInt()
     header2 = bs.readUInt()
-    data = []
+    data = [header1, header2]
     data.append("Data Chunk 1")
     for i in range(17):
         data.append(bs.readFloat())
@@ -642,6 +713,8 @@ def load0x08002402Chunk(index, name, length):
     data.append("Data Chunk 3")
     for i in range(16):
         data.append(bs.readFloat())
+    
+    materialInfoList[-1].addMaterialData(data)
     material = NoeMaterial("24-%s-%s-%s-%s-%s" % (texture, effect, unknown1, unknown2, unknown3), "")
     indexList[index].setCustomName(material.name)
     material.setTexture(texture)
@@ -651,15 +724,35 @@ def load0x08002402Chunk(index, name, length):
     #material.setUserData(b'unknown3 ', unknown3)
     addMaterial(material)
 
+def load0x08002502Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "26", name))
+    bs.seek(16, NOESEEK_REL)
+    unknown1 = loadChunk(bs.readUInt() - 1)
+    unknown2 = loadChunk(bs.readUInt() - 1)
+    unknown3 = loadChunk(bs.readUInt() - 1)
+    unknown4 = loadChunk(bs.readUInt() - 1)
+    unknown5 = loadChunk(bs.readUInt() - 1)
+    unknown6 = loadChunk(bs.readUInt() - 1)
+    material = NoeMaterial("25-%s-%s-%s-%s-%s-%s" % (unknown1, unknown2, unknown3, unknown4, unknown5, unknown6), "")
+    indexList[index].setCustomName(material.name)
+    material.setTexture(unknown1)
+    #material.setUserData(b'effect  ', effect)
+    #material.setUserData(b'unknown1 ', unknown1)
+    #material.setUserData(b'unknown2 ', unknown2)
+    #material.setUserData(b'unknown3 ', unknown3)
+    addMaterial(material)
+
 def load0x08002802Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "28", name))
     bs.seek(0x64, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
-    material = NoeMaterial("30-%s" % texture, "")
+    material = NoeMaterial("28-%s" % texture, "")
     indexList[index].setCustomName(material.name)
     material.setTexture(texture)
     addMaterial(material)
 
 def load0x08002902Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "29", name))
     data = []
     data.append("Data Chunk 1")
     for i in range(7):
@@ -680,11 +773,13 @@ def load0x08002902Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002A02Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "2A", name))
     material = NoeMaterial("2A-" + name[1:], "")
     indexList[index].setCustomName(material.name)
     addMaterial(material)
 
 def load0x08002B02Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "2B", name))
     header1 = bs.readUInt()
     header2 = bs.readUInt()
     texture = loadChunk(bs.readUInt() - 1)
@@ -708,6 +803,7 @@ def load0x08002B02Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002C02Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "2C", name))
     bs.seek(0x8, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
     normal = loadChunk(bs.readUInt() - 1)
@@ -720,6 +816,7 @@ def load0x08002C02Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002D02Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "2D", name))
     bs.seek(0x30, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
     texture2 = loadChunk(bs.readUInt() - 1)
@@ -732,6 +829,7 @@ def load0x08002D02Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08002E02Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "2E", name))
     bs.seek(0x8, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
     material = NoeMaterial("2E-%s" % texture, "")
@@ -740,6 +838,7 @@ def load0x08002E02Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08003002Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "30", name))
     bs.seek(0x8, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
     normal = loadChunk(bs.readUInt() - 1)
@@ -750,6 +849,7 @@ def load0x08003002Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08003202Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "32", name))
     bs.seek(0x8, NOESEEK_REL)
     texture1 = loadChunk(bs.readUInt() - 1)
     texture2 = loadChunk(bs.readUInt() - 1)
@@ -759,6 +859,7 @@ def load0x08003202Chunk(index, name, length):
     addMaterial(material)
 
 def load0x08003302Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "33", name))
     material = NoeMaterial("33-" + name[1:], "")
     indexList[index].setCustomName(material.name)
     '''
@@ -774,6 +875,13 @@ def load0x08003302Chunk(index, name, length):
 
 def load0x0900Chunk(index, name, length):
     indexOf0x1100Chunk = bs.readUInt() - 1
+    data = [bs.readUInt(), bs.readUInt(), bs.readUInt()]
+    materialInfoList[-1].addTextureData(index, data)
+    if length == 0x30: #Atlas
+        atlas = []
+        for i in range(4):
+            atlas.append(bs.readFloat())
+        materialInfoList[-1].addTextureAtlas(atlas)
     if indexOf0x1100Chunk != -1:
         return loadChunk(indexOf0x1100Chunk)
     return ''
@@ -782,6 +890,7 @@ def load0x1100Chunk(index, name, length):
     bs.seek(12, NOESEEK_REL)
     lengthOfTextureString = bs.readUInt()
     textureString = bs.readBytes(lengthOfTextureString).decode('ASCII').rstrip("\0")
+    materialInfoList[-1].addTexture(textureString)
     return textureString
 
 def load0x1000Chunk(index, name, length):
@@ -821,6 +930,12 @@ def load0x14000303Chunk(index, name, length):
     B = bs.readFloat()
     return "PL%i-%s-%s-%s-%s" % (index, str(round(intensity, 4)), str(round(R, 4)), str(round(G, 4)), str(round(B, 4)))
 
+def load0x2d00Chunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "DC", name))
+    bs.seek(4, NOESEEK_REL)
+    texture = loadChunk(bs.readUInt() - 1)
+    normal = loadChunk(bs.readUInt() - 1) 
+    return "DC%i-%s" % (index, texture)
 # def load0x2b00Chunk(index, name, length):
 
 # def load0x3100Chunk(index, name, length):
@@ -829,51 +944,153 @@ def load0x14000303Chunk(index, name, length):
 def loadMeshVertex(vertexCount, vertexStruct):
     vertexs = []
     uvCount = vertexStruct.count(0x9E)
-    print("UV Count: %i" % uvCount)
-    uvs = [[]]*uvCount
+    # print("Vertex Count: %i" % vertexCount)
+    # print("UV Map Count: %i" % uvCount)
+    uvs = []
+    colors = []
     normals = []
     tangents = []
+    if print_vertice_csv:
+        for dataType in vertexStruct:
+            if dataType == 0x83:  # Vertex Ruler XYZ
+                print("Vertex 1, Vertex 2, Vertex 3, ", end = "")
+            elif dataType == 0x84:  # Vertex Quaternion
+                print("Vertex 1, Vertex 2, Vertex 3, Vertex 4, ", end = "")
+            elif dataType == 0xA1:  # Unknown, skip
+                print("Unknown, ", end = "")
+            elif dataType == 0x9C:  # Texture weight
+                print("TextureWeight 1, TextureWeight 2, TextureWeight 3, TextureWeight 4, ", end = "")
+            elif dataType == 0x9E:  # UV
+                for i in range (uvCount):
+                    print("UV%i 1, UV%i 2, " % (i, i), end = "")
+            elif dataType == 0x88:  # Normal
+                print("Normal 1, Normal 2, Normal 3, Normal 4, ", end = "")
+            elif dataType == 0x87:  # Unknown
+                print("Unknown", end = "")
+        print()
+
     for vertex in range(vertexCount):
         uvLoaded = 0
         for dataType in vertexStruct:
-            if dataType == 0x83:  # Vertex
-                z = bs.readFloat() * global_scale
-                y = bs.readFloat() * global_scale
-                x = bs.readFloat() * global_scale
-                # rawTransform = NoeVec3((z, y, x)) * bones[meshInfos[-1].parentID].getMatrix()
-                # transform = NoeVec3((rawTransform.getStorage()[2], rawTransform.getStorage()[1], rawTransform.getStorage()[0]))
-                transform = NoeVec3((z, y, x))
+            if dataType == 0x83:  # Vertex Ruler XYZ
+                rawTransform = NoeVec3((bs.readFloat(), bs.readFloat(), bs.readFloat())) #Read XYZ
+                if print_vertice_csv:
+                    print("%f, %f, %f, " % (rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2]), end = "")
+                rawTransform *= NoeVec3((global_scale, global_scale, global_scale)) #Scale
+                rawTransform *= boneInfos[meshInfos[-1].parentID].globalMatrix #Globalization
+                transform = NoeVec3((rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2])) #Get NoeVec3 From Mat43
+                vertexs.append(transform)
+
+            elif dataType == 0x84:  # Vertex XYZ?
+                rawTransform = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat())) #Read XYZ?
+                if print_vertice_csv:
+                    print("%f, %f, %f, %f, " % (rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2], rawTransform.getStorage()[3]), end = "")
+                rawTransform = rawTransform.toVec3() #Reduce it to XYZ
+                rawTransform *= NoeVec3((global_scale, global_scale, global_scale)) #Scale
+                rawTransform *= boneInfos[meshInfos[-1].parentID].globalMatrix #Globalization
+                transform = NoeVec3((rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2])) #Get NoeVec3 From Mat43
                 vertexs.append(transform)
             elif dataType == 0xA1:  # Unknown, skip
-                bs.seek(4, NOESEEK_REL)
-            elif dataType == 0x9C:  # Unknown, skip
-                bs.seek(4, NOESEEK_REL)
+                if print_vertice_csv:
+                    byte_array = bs.readBytes(4)
+                    print(''.join('{:02x}'.format(x) for x in byte_array), end = ", ")
+                else:
+                    bs.seek(4, NOESEEK_REL)
+                    # r = bs.readUByte() / 255
+                    # g = bs.readUByte() / 255
+                    # b = bs.readUByte() / 255
+                    # a = bs.readUByte() / 255
+                    # colors.append(NoeVec4([r,g,b,a]))
+            elif dataType == 0x9C:  # Texture weight
+                # r = bs.readFloat()
+                # colors.append(NoeVec4([r,0.0,0.0,1.0]))
+                r = bs.readUByte() / 255
+                g = bs.readUByte() / 255
+                b = bs.readUByte() / 255
+                a = bs.readUByte() / 255
+                colors.append(NoeVec4([r,g,b,a]))
+                if print_vertice_csv:
+                    print("%f, %f, %f, %f, " % (r,g,b,a), end = "")
+                #bs.seek(4, NOESEEK_REL)
             elif dataType == 0x9E:  # UV
                 u = bs.readShort()/1024  
                 v = bs.readShort()/1024
-                if uvLoaded < 1: #Only load the first UV
-                    uvs[uvLoaded].append(NoeVec3((u, v, 0)))
+                if print_vertice_csv:
+                    print("%f, %f, " % (u, v), end = "")
+                if(len(uvs) <= uvLoaded):
+                    uvs.append([])
+                uvs[uvLoaded].append(NoeVec3((u, v, 0)))
                 uvLoaded += 1
-                '''
-                if u > 1 or u < -1 or v > 1 or v < -1:
-                    print("UV out of bound %f %f %i at %s" % (u, v, uvCount, hex(bs.tell()-4)))
-                '''
             elif dataType == 0x88:  # Normal
-                # normals.append(NoeVec3((bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat())))
-                # bs.seek(2, NOESEEK_REL)
-                bs.seek(8, NOESEEK_REL)
-            elif dataType == 0x87:  # Tangent
-                # tangents.append(NoeVec3((bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat())))
-                # bs.seek(2, NOESEEK_REL)
-                bs.seek(8, NOESEEK_REL)
+                normal = NoeQuat([bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat(), bs.readHalfFloat()])
+                if print_vertice_csv:
+                    print("%f, %f, %f, %f, " % (normal.getStorage()[0], normal.getStorage()[1], normal.getStorage()[2], normal.getStorage()[3]), end = "")
+                normal = normal.toMatAngles().toVec3()
+                normals.append(normal)
+            elif dataType == 0x87:  # Unknown
+                if print_vertice_csv:
+                    byte_array = bs.readBytes(8)
+                    print(''.join('{:02x}'.format(x) for x in byte_array), end = ", ")
+                else:
+                    bs.seek(8, NOESEEK_REL)
+        if print_vertice_csv:
+            print()
+
     meshs[-1].setPositions(vertexs)
-    meshs[-1].setUVs(uvs[0])
-    #meshs[-1].setNormals(normals)
-    #meshs[-1].setTangents(tangents)
-    '''
-    for i in range(uvCount):
-        meshs[-1].setUVs(uvs[i], i)
-    '''
+    if export_normal_and_tangent:
+        meshs[-1].setNormals(normals)
+        meshs[-1].setTangents(tangents)
+
+    if len(uvs) > 0:
+        meshs[-1].setUVs(uvs[0], 0)
+        for i in range(1, uvCount):
+            meshs[-1].setUVs(uvs[i], i+1)
+    
+    meshs[-1].setColors(colors)
+
+    # if vertexStruct.count(0x84) > 0:
+    #     faces = []
+    #     for i in range(0, len(vertexs), 3):
+    #         faces.append(i)
+    #         faces.append(i+1)
+    #         faces.append(i+2)
+    #     meshs[-1].setIndices(meshs[-1].indices + faces)
+
+def loadLeaves(vertexCount, vertexStruct):
+    vertexs = []
+    for vertex in range(vertexCount):
+        uvLoaded = 0
+        for dataType in vertexStruct:
+            if dataType == 0x84:  # Vertex Quaternion
+                rawTransform = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat())).toVec3() #Read Quad and convert it to Ruler XYZ
+                rawTransform *= NoeVec3((global_scale, global_scale, global_scale)) #Scale
+                rawTransform *= boneInfos[meshInfos[-1].parentID].globalMatrix #Globalization
+                transform = NoeVec3((rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2])) #Get NoeVec3 From Mat43
+                vertexs.append(transform)
+
+    meshs[-1].setPositions(vertexs)
+
+    # faces = []
+    # for i in range(0, len(vertexs), 3):
+    #     faces.append(i)
+    #     faces.append(i+1)
+    #     faces.append(i+2)
+    # meshs[-1].setIndices(meshs[-1].indices + faces)
+
+def loadGrass(vertexCount, vertexStruct):
+    vertexs = []
+    for vertex in range(vertexCount):
+        uvLoaded = 0
+        for dataType in vertexStruct:
+            if dataType == 0x84:  # Vertex Quaternion
+                rawTransform = NoeVec4((bs.readFloat(), bs.readFloat(), bs.readFloat(), bs.readFloat())).toVec3() #Read Quad and convert it to Ruler XYZ
+                rawTransform *= NoeVec3((global_scale, global_scale, global_scale)) #Scale
+                rawTransform *= boneInfos[meshInfos[-1].parentID].globalMatrix #Globalization
+                transform = NoeVec3((rawTransform.getStorage()[0], rawTransform.getStorage()[1], rawTransform.getStorage()[2])) #Get NoeVec3 From Mat43
+                vertexs.append(transform)
+
+    meshs[-1].setPositions(vertexs)
+
 
 
 def loadMeshFace(faceCount):
@@ -929,7 +1146,6 @@ def printMeshCSV():
     print("Name|Index|Vertex Count|Submesh Count|Face Count|Texture|Type Of Material|Vertex Struct|Index Of 0x0500Chunk|Index Of 0x0600Chunk|Index Of 0x0800Chunk")
     for meshInfo in meshInfos:
         print(meshInfo.name, hex(meshInfo.index), meshInfo.vertexCount, meshInfo.numOfFaceChunk, meshInfo.faceCount, meshInfo.texture, [typeOf0x0800Chunk(x) for x in meshInfo.indexOf0x0800Chunk], [hex(x) for x in meshInfo.vertexStruct], hex(meshInfo.indexOf0x0500Chunk), [hex(x) for x in meshInfo.indexOf0x0600Chunk], [hex(x) for x in meshInfo.indexOf0x0800Chunk], sep="|")
-    print("End of Mesh CSV List ----------------------------------------")
 
 def typeOf0x0800Chunk(index):
     origonalOffset = bs.tell()
@@ -940,6 +1156,11 @@ def typeOf0x0800Chunk(index):
 
 def cleanUpMesh():
     for i in range(0, len(meshs)):
+        print("Cleaning up mesh " + meshs[i].name)
+        if len(meshs[i].indices) == 0: #Don't clean up tree leaves, they are vertex cloud
+            continue
+
+        print("Vertice Count: %i"  % len(meshs[i].positions))
         vertice_used = [False] * len(meshs[i].positions)
         for x in meshs[i].indices:
             vertice_used[x] = True
@@ -961,17 +1182,55 @@ def cleanUpMesh():
 
         new_vertice = []
         #generate new vertice list
-        for x in range(0, len(meshs[i].positions)):
+        for x in range(len(meshs[i].positions)):
             if vertice_used[x]:
                 new_vertice.append(meshs[i].positions[x])
         meshs[i].setPositions(new_vertice)
 
         #generate new uv list 
         new_uv = []
-        for x in range(0, len(meshs[i].uvs)):
+        # print("UV Count: %i" % len(meshs[i].uvs))
+        for x in range(len(meshs[i].uvs)):
             if vertice_used[x]:
                 new_uv.append(meshs[i].uvs[x])
         meshs[i].setUVs(new_uv)
+
+        #generate new additional uv list 
+        for current_uv in range(len(meshs[i].uvxList)):
+            new_uv = []
+            for x in range(len(meshs[i].uvxList[current_uv])):
+                if vertice_used[x]:
+                    new_uv.append(meshs[i].uvxList[current_uv][x])
+            meshs[i].setUVs(new_uv, current_uv+2)
+
+        # new_uv = []
+        # for x in range(0, len(meshs[i].uvs)):
+        #     if vertice_used[x]:
+        #         new_uv.append(meshs[i].uvs[x])
+        # meshs[i].setUVs(new_uv)
+
+        if export_normal_and_tangent:
+            #generate new normal list
+            new_normal = []
+            for x in range(len(meshs[i].normals)):
+                if vertice_used[x]:
+                    new_normal.append(meshs[i].normals[x])
+            meshs[i].setNormals(new_normal)
+
+            #generate new tangent list
+            new_tangent = []
+            for x in range(len(meshs[i].tangents)):
+                if vertice_used[x]:
+                    new_tangent.append(meshs[i].tangents[x])
+            meshs[i].setTangents(new_tangent)
+
+        #generate new vertex color list
+        if len(meshs[i].colors) != 0:
+            new_colors = []
+            for x in range(0, len(meshs[i].colors)):
+                if vertice_used[x]:
+                    new_colors.append(meshs[i].colors[x])
+            meshs[i].setColors(new_colors)
 
         #generate new weight list
         if len(meshs[i].weights) != 0:
@@ -994,6 +1253,7 @@ def addMaterial(material):
 def compileBones(index):
     if index < numOfBone:
         bone = boneInfos[index]
+        # if bone.isBone:
         if bone.hasRPB == False and bone.parentID != -1:
             bone.setGlobalMatrix(bone.boneMatrix * boneInfos[bone.parentID].globalMatrix) #Globalize
 
@@ -1001,5 +1261,22 @@ def compileBones(index):
         for child in bone.childList:
             compileBones(child)
 
-                
-    
+def printMaterial():
+    print("MATERIAL INFO--------------------------------------------")
+    readed_material = []
+    for material in materialInfoList:
+        if material.index not in readed_material:
+            print("Material#%s - %s - Type %s" % (hex(material.index), material.name, material.chunkType))
+            readed_material.append(material.index) #DC will cause duplicated info be recorded
+            if len(material.data) != 0:
+                print("Parameters: ", end = '')
+                [print(str(x)+', ', end = '') for x in material.data]
+                print()
+            for texture in material.textureList:
+                print(texture[2] + ", ", end = '')
+                [print(hex(x)+', ', end = '') for x in texture[1]]
+                if texture[3] != None:
+                    print("Atlas: ", end = '')
+                    [print(str(x)+', ', end = '') for x in texture[3]]
+                print()
+            print()
