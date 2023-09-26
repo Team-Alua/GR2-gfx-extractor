@@ -385,22 +385,26 @@ def loadChunk(index):
                 while len(chunkType) != 8:
                     chunkType = "0" + chunkType
                 debugprint("\n------ Error: Unknown Material Chunk: 0x%s ------" % (chunkType[6:8]+chunkType[4:6]+chunkType[2:4]+chunkType[0:2]))
-                raise Exception("unknown_material")
+                result = loadUnknownMaterialChunk(index, name, length)
         elif typeID % 0x10000 == 0x0009:
             debugprint("Chunk 0x0900xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
             result = load0x0900Chunk(index, name, length)
-        elif typeID % 0x10000 == 0x0011:
-            debugprint("Chunk 0x1100xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
-            result = load0x1100Chunk(index, name, length)
-        elif typeID % 0x10000 == 0x0012:
-            debugprint("Chunk 0x1200xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
-            result = load0x1200Chunk(index, name, length)
         elif typeID % 0x10000 == 0x000f:
             debugprint("Chunk 0x0f00xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
             result = load0x0f00Chunk(index, name, length)
         elif typeID % 0x10000 == 0x0010:
             debugprint("Chunk 0x1000xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
             result = load0x1000Chunk(index, name, length)
+        elif typeID % 0x10000 == 0x0011:
+            debugprint("Chunk 0x1100xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
+            result = load0x1100Chunk(index, name, length)
+        elif typeID % 0x10000 == 0x0012:
+            debugprint("Chunk 0x1200xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
+            result = load0x1200Chunk(index, name, length)
+        elif typeID % 0x10000 == 0x0019:
+            debugprint("Chunk 0x1900xxxx - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
+            debugprint("Skip reading")
+            # result = load0x1900Chunk(index, name, length)
         elif typeID == 0x03030014:
             debugprint("Chunk 0x14000303 - Name: %s - Address: %s - Length: %s" % (name, hex(address), hex(length)))
             result = load0x14000303Chunk(index, name, length)
@@ -415,7 +419,8 @@ def loadChunk(index):
             while len(chunkType) != 8:
                 chunkType = "0" + chunkType
             debugprint("\n------ Error: Unknown Chunk type 0x%s ------" % (chunkType[6:8]+chunkType[4:6]+chunkType[2:4]+chunkType[0:2]))
-            raise Exception("unknown_chunk")
+            loadUnknownChunk(index, name, length)
+            # raise Exception("unknown_chunk")
             #noesis.doException("Unknown Chunk, skipped 0x %s" % chunkType[6:8]+chunkType[4:6]+chunkType[2:4]+chunkType[0:2])
         bs.seek(origonalOffset, NOESEEK_ABS)
     else:
@@ -852,7 +857,13 @@ def load0x08002C02Chunk(index, name, length):
     texture = loadChunk(bs.readUInt() - 1)
     normal = loadChunk(bs.readUInt() - 1)
     interior = loadChunk(bs.readUInt() - 1)
-    unknown = loadChunk(bs.readUInt() - 1)
+    overlay = loadChunk(bs.readUInt() - 1)
+
+    data = []
+    for i in range(18):
+        data.append(bs.readFloat())
+    materialInfoList[-1].addMaterialData(data)
+
     if material_param_as_name:
         material = NoeMaterial("2C-%s-%s" % (texture,interior), "")
     else:
@@ -882,6 +893,11 @@ def load0x08002E02Chunk(index, name, length):
     materialInfoList.append(MaterialInfo(index, "2E", name))
     bs.seek(0x8, NOESEEK_REL)
     texture = loadChunk(bs.readUInt() - 1)
+    data = []
+    for i in range(9):
+        data.append(bs.readFloat())
+        
+    materialInfoList[-1].addMaterialData(data)
     if material_param_as_name:
         material = NoeMaterial("2E-%s" % texture, "")
     else:
@@ -935,6 +951,24 @@ def load0x08003302Chunk(index, name, length):
     materialInfoList.append(MaterialInfo(index, "33", name))
     if material_param_as_name:
         material = NoeMaterial("33-" + name[1:], "")
+    else:
+        material = NoeMaterial(name.split("/")[-1], "")
+    indexList[index].setCustomName(material.name)
+    '''
+        header1 = bs.readUInt()
+    subchunkID = []
+    for i in range(4):
+        subchunkID.append(bs.readUInt() - 1)
+    data = []
+    for i in range(7):
+        data.append(bs.readFloat())
+    '''
+    addMaterial(material)
+
+def loadUnknownMaterialChunk(index, name, length):
+    materialInfoList.append(MaterialInfo(index, "Unknown", name))
+    if material_param_as_name:
+        material = NoeMaterial("Unknown-" + name[1:], "")
     else:
         material = NoeMaterial(name.split("/")[-1], "")
     indexList[index].setCustomName(material.name)
@@ -1073,6 +1107,14 @@ def load0x2b00Chunk(index, name, length):
             break
         debugprint("Can't find parent %i" % parent0x0400ID)
         return False
+    
+def loadUnknownChunk(index, name, length):
+    parentID = call_history[-2]
+    name = indexList[parentID].name.split('/')[-1] 
+    materialInfoList.append(MaterialInfo(index, "Unknown", name))
+    materialInfoList[-1].addMaterialData([])
+    #return "DC%i-%s" % (index, texture)
+    return name
 
 def loadMeshVertex(vertexCount, vertexStruct):
     vertexs = []
